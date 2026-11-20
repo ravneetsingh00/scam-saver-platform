@@ -5,6 +5,8 @@
   const files = [];
   const maxFiles = 5;
   const maxSize = 20 * 1024 * 1024;
+  const allowedAudioTypes = new Set(['audio/mpeg','audio/mp3','audio/mp4','audio/x-m4a','audio/aac','audio/x-aac','audio/wav','audio/x-wav','audio/wave','audio/vnd.wave','audio/ogg','audio/webm']);
+  const allowedExtensions = new Set(['.jpg','.jpeg','.png','.webp','.pdf','.mp4','.webm','.mov','.mp3','.m4a','.aac','.wav','.ogg','.apk']);
   let step = 0;
   let submitting = false;
   const $ = selector => form.querySelector(selector);
@@ -70,7 +72,8 @@
     for (const file of incoming) {
       if (files.length >= maxFiles) { showMessage('You can attach up to five files to a report.'); break; }
       if (file.size > maxSize) { showMessage(`${file.name} is larger than the 20 MB per-file limit.`); continue; }
-      const allowed = imageFile(file) || file.type === 'application/pdf' || file.type.startsWith('audio/') || file.type.startsWith('video/') || isApk(file);
+      const extension = `.${file.name.split('.').pop().toLowerCase()}`;
+      const allowed = imageFile(file) || file.type === 'application/pdf' || allowedAudioTypes.has(file.type.toLowerCase()) || ['video/mp4','video/webm','video/quicktime'].includes(file.type.toLowerCase()) || ((!file.type || file.type === 'application/octet-stream') && allowedExtensions.has(extension));
       if (!allowed) { showMessage(`${file.name} is not a supported evidence type.`); continue; }
       if (!files.some(entry => entry.file.name === file.name && entry.file.size === file.size && entry.file.lastModified === file.lastModified)) files.push({ file, source });
     }
@@ -125,19 +128,39 @@
     const button = document.getElementById(draft ? 'saveDraft' : 'submitBtn');
     if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); button.textContent = draft ? 'Saving…' : 'Submitting…'; }
     const progress = document.getElementById('uploadProgress');
+    const progressBar = document.getElementById('uploadProgressBar');
+    const progressLabel = document.getElementById('uploadProgressLabel');
     progress?.classList.remove('hide');
+    if (progress) { progress.setAttribute('aria-valuenow', '0'); progress.setAttribute('aria-label', 'Upload progress'); }
+    if (progressBar) progressBar.style.width = '0%';
+    if (progressLabel) progressLabel.textContent = 'Preparing secure upload…';
     try {
       const body = new FormData();
       body.append('payload', JSON.stringify(payload(draft)));
       files.forEach(entry => body.append('evidence', entry.file, entry.file.name));
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 120000);
-      let response;
-      try {
-        response = await fetch('/api/reports', { method: 'POST', headers: { Authorization: `Bearer ${token()}` }, body, signal: controller.signal });
-      } finally { clearTimeout(timeout); }
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || `Report could not be saved (${response.status}).`);
+      const data = await new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open('POST', '/api/reports');
+        request.setRequestHeader('Authorization', `Bearer ${token() || ''}`);
+        request.timeout = 120000;
+        request.upload.addEventListener('progress', event => {
+          if (!event.lengthComputable) { if (progressLabel) progressLabel.textContent = 'Uploading securely…'; return; }
+          const percent = Math.min(100, Math.round((event.loaded / event.total) * 100));
+          if (progressBar) progressBar.style.width = `${percent}%`;
+          if (progress) progress.setAttribute('aria-valuenow', String(percent));
+          if (progressLabel) progressLabel.textContent = percent >= 100 ? 'Saving report securely…' : `Uploading securely… ${percent}%`;
+        });
+        request.addEventListener('load', () => {
+          let response = {};
+          try { response = JSON.parse(request.responseText || '{}'); } catch {}
+          if (request.status < 200 || request.status >= 300) return reject(new Error(response.message || `Report could not be saved (${request.status}).`));
+          resolve(response);
+        });
+        request.addEventListener('error', () => reject(new Error('Upload failed because the server could not be reached. Check your connection and try again.')));
+        request.addEventListener('timeout', () => reject(Object.assign(new Error('Upload timed out. Check your connection and try again.'), { name: 'AbortError' })));
+        request.addEventListener('abort', () => reject(Object.assign(new Error('Upload was cancelled.'), { name: 'AbortError' })));
+        request.send(body);
+      });
       form.classList.add('hide');
       const success = document.getElementById('caseSuccess');
       success?.classList.remove('hide');

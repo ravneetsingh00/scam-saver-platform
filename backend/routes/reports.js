@@ -3,25 +3,37 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs/promises');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const rateLimit = require('express-rate-limit');
 const Report = require('../models/Report');
 const Business = require('../models/Business');
+const Investigation = require('../models/Investigation');
 const { protect, adminOnly } = require('../middleware/auth');
 const asyncHandler = require('../utils/asyncHandler');
 const makeReportId = require('../utils/reportId');
 const makeCasePdf = require('../utils/caseSummaryPdf');
 const { organizeIncident } = require('../utils/openaiInvestigation');
+const evidenceStorage = require('../utils/evidenceStorage');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 
-const uploadDir = path.join(__dirname, '../uploads');
+const uploadDir = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, '../uploads'));
 const quarantineDir = path.join(uploadDir, 'quarantine');
 const apkMime = 'application/vnd.android.package-archive';
-const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'video/mp4', 'video/webm', 'video/quicktime', 'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/webm', apkMime]);
+const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'video/mp4', 'video/webm', 'video/quicktime', 'audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/wav', 'audio/ogg', 'audio/webm', apkMime]);
+const mimeAliases = { 'audio/x-m4a': 'audio/mp4', 'audio/x-wav': 'audio/wav', 'audio/wave': 'audio/wav', 'audio/vnd.wave': 'audio/wav', 'audio/x-aac': 'audio/aac' };
+const mimeByExtension = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.apk': apkMime };
+function normalizedMime(file) {
+  const received = String(file.mimetype || '').toLowerCase().split(';')[0].trim();
+  const alias = mimeAliases[received] || received;
+  return allowedTypes.has(alias) ? alias : (mimeByExtension[path.extname(file.originalname || '').toLowerCase()] || alias);
+}
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 5, fields: 50 },
   fileFilter: (req, file, cb) => {
     const isApk = /\.apk$/i.test(file.originalname || '') && [apkMime, 'application/octet-stream', 'application/zip'].includes(file.mimetype);
-    const accepted = allowedTypes.has(file.mimetype) || isApk;
+    const accepted = allowedTypes.has(normalizedMime(file)) || isApk;
     cb(accepted ? null : Object.assign(new Error('Evidence must be a supported image, PDF, video, audio file or APK.'), { status: 400 }), accepted);
   },
 });
@@ -106,15 +118,17 @@ function fileSignature(file) {
   if (/\.apk$/i.test(file.originalname || '') && [apkMime, 'application/octet-stream', 'application/zip'].includes(file.mimetype)) {
     return bytes.length >= 4 && bytes.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
   }
-  if (file.mimetype === 'image/jpeg') return bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  if (file.mimetype === 'image/png') return bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  if (file.mimetype === 'image/webp') return bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP';
-  if (file.mimetype === 'application/pdf') return bytes.subarray(0, 5).toString() === '%PDF-';
-  if (['video/mp4', 'video/quicktime', 'audio/mp4'].includes(file.mimetype)) return bytes.subarray(4, 8).toString() === 'ftyp';
-  if (file.mimetype === 'video/webm' || file.mimetype === 'audio/webm') return bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
-  if (file.mimetype === 'audio/mpeg') return bytes.subarray(0, 3).toString() === 'ID3' || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0);
-  if (file.mimetype === 'audio/wav') return bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WAVE';
-  if (file.mimetype === 'audio/ogg') return bytes.subarray(0, 4).toString() === 'OggS';
+  const mimeType = normalizedMime(file);
+  if (mimeType === 'image/jpeg') return bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (mimeType === 'image/png') return bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (mimeType === 'image/webp') return bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP';
+  if (mimeType === 'application/pdf') return bytes.subarray(0, 5).toString() === '%PDF-';
+  if (['video/mp4', 'video/quicktime', 'audio/mp4'].includes(mimeType)) return bytes.subarray(4, 8).toString() === 'ftyp';
+  if (mimeType === 'video/webm' || mimeType === 'audio/webm') return bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+  if (mimeType === 'audio/mpeg') return bytes.subarray(0, 3).toString() === 'ID3' || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0);
+  if (mimeType === 'audio/aac') return bytes.length > 2 && bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0;
+  if (mimeType === 'audio/wav') return bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WAVE';
+  if (mimeType === 'audio/ogg') return bytes.subarray(0, 4).toString() === 'OggS';
   return false;
 }
 
@@ -127,13 +141,21 @@ async function storeFiles(files, descriptions = []) {
     for (const [index, file] of files.entries()) {
       if (!fileSignature(file)) throw Object.assign(new Error(`Attachment “${safeText(file.originalname, 80)}” does not match its declared file type.`), { status: 400 });
       const isApk = /\.apk$/i.test(file.originalname || '') && [apkMime, 'application/octet-stream', 'application/zip'].includes(file.mimetype);
-      const mimeType = isApk ? apkMime : file.mimetype;
-      const ext = ({ 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'application/pdf': '.pdf', 'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov', 'audio/mpeg': '.mp3', 'audio/mp4': '.m4a', 'audio/wav': '.wav', 'audio/ogg': '.ogg', 'audio/webm': '.webm', [apkMime]: '.apk' })[mimeType];
+      const mimeType = isApk ? apkMime : normalizedMime(file);
+      const ext = ({ 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'application/pdf': '.pdf', 'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov', 'audio/mpeg': '.mp3', 'audio/mp4': '.m4a', 'audio/aac': '.aac', 'audio/wav': '.wav', 'audio/ogg': '.ogg', 'audio/webm': '.webm', [apkMime]: '.apk' })[mimeType];
       const filename = `${crypto.randomUUID()}${ext}`;
       const directory = isApk ? quarantineDir : uploadDir;
       if (isApk) { await fs.mkdir(quarantineDir, { recursive: true, mode: 0o700 }); await fs.chmod(quarantineDir, 0o700); }
       await fs.writeFile(path.join(directory, filename), file.buffer, { flag: 'wx', mode: 0o600 });
-      stored.push({ filename, originalName: path.basename(file.originalname.replace(/\\/g, '/')).slice(0, 180), mimeType, size: file.size, description: safeText(descriptions[index], 240), uploadedAt: new Date(), quarantined: isApk });
+      const item = { filename, originalName: path.basename(file.originalname.replace(/\\/g, '/')).slice(0, 180), mimeType, size: file.size, description: safeText(descriptions[index], 240), uploadedAt: new Date(), quarantined: isApk, storageProvider: 'local' };
+      stored.push(item);
+      const cloudRequired = process.env.EVIDENCE_STORAGE === 'cloudinary';
+      if (!isApk && (evidenceStorage.isCloudinaryConfigured() || cloudRequired)) {
+        let result;
+        try { result = await evidenceStorage.uploadBuffer(file.buffer, { mimeType, originalName: item.originalName, publicId: `scam-saver/evidence/${crypto.randomUUID()}` }); }
+        catch { throw Object.assign(new Error('Secure cloud storage is unavailable. The evidence was not submitted; try again later.'), { status: 503 }); }
+        Object.assign(item, { storageProvider: 'cloudinary', secureUrl: result.secure_url, publicId: result.public_id, resourceType: result.resource_type, deliveryType: result.type || 'authenticated', format: result.format || path.extname(filename).slice(1) });
+      }
     }
     return stored;
   } catch (error) {
@@ -144,6 +166,26 @@ async function storeFiles(files, descriptions = []) {
 
 function evidencePath(item) {
   return path.join(item.quarantined ? quarantineDir : uploadDir, path.basename(item.filename));
+}
+
+async function includeLegacyEvidence(report) {
+  const value = report?.toObject ? report.toObject() : report;
+  if (!value || value.evidenceAttachments?.length || !value.evidence) return value;
+  const filename = path.basename(String(value.evidence));
+  const mimeType = mimeByExtension[path.extname(filename).toLowerCase()] || 'application/octet-stream';
+  const filePath = path.join(uploadDir, filename);
+  const stats = await fs.stat(filePath).catch(() => null);
+  value.evidenceAttachments = [{
+    filename,
+    originalName: filename,
+    mimeType,
+    size: stats?.size || 0,
+    uploadedAt: value.createdAt || value.updatedAt || null,
+    description: '',
+    quarantined: false,
+    legacy: true,
+  }];
+  return value;
 }
 
 function caseFields(details) {
@@ -158,7 +200,7 @@ function caseFields(details) {
 
 async function businessReference(details) {
   if (!details.name) return null;
-  const match = await Business.findOne({ name: { $regex: `^${escapeRegex(details.name)}$`, $options: 'i' } }).select('_id').lean();
+  const match = await Business.findOne({ name: { $regex: `^${escapeRegex(details.name)}$`, $options: 'i' }, isDemo: { $ne: true } }).select('_id').lean();
   return match?._id || null;
 }
 
@@ -187,6 +229,7 @@ async function findMatches(payload, excludeId = null) {
 
 async function ownerOrAdmin(req, res, report) {
   if (!report) { res.status(404).json({ message: 'Case not found.' }); return false; }
+  if (report.isDemo === true) return true;
   const submittedBy = report.submittedBy?._id || report.submittedBy;
   if (req.user.role !== 'admin' && String(submittedBy) !== String(req.user._id)) { res.status(403).json({ message: 'You cannot access this case.' }); return false; }
   return true;
@@ -198,6 +241,14 @@ function applyReporterPrivacy(report) {
     if (value?.reporter) { value.reporter.email = ''; value.reporter.phone = ''; value.reporter.address = ''; }
     value.contactEmail = '';
   }
+  return value;
+}
+
+function redactDemoReporter(report) {
+  const value = report?.toObject ? report.toObject() : { ...report };
+  value.reporter = { hideNameFromPublic: true, shareContactWithModerators: false };
+  value.contactEmail = '';
+  if (value.submittedBy) value.submittedBy = { name: 'SCAM SAVER demo', role: 'demo' };
   return value;
 }
 
@@ -291,6 +342,27 @@ router.post('/:id/response', protect, submissionLimit, asyncHandler(async (req, 
   res.json({ message: 'Additional information was added to the case timeline.', reportId: report.reportId });
 }));
 
+// Business detail pages may show evidence only for reports the current user owns,
+// or all linked reports to an administrator. Public directory counts stay coarse.
+router.get('/business/:businessId/authorized', protect, asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.businessId)) return res.status(400).json({ message: 'The business ID is invalid.' });
+  const filter = { business: req.params.businessId, status: { $ne: 'Draft' } };
+  if (req.user.role !== 'admin') filter.$or = [{ submittedBy: req.user._id }, { isDemo: true }];
+  const reports = await Report.find(filter).select('reportId business businessName category description incidentDate fraudType status createdAt isDemo evidence evidenceAttachments moderationHistory').sort({ createdAt: -1 }).limit(100).lean();
+  const withLegacy = await Promise.all(reports.map(includeLegacyEvidence));
+  res.set('Cache-Control', 'private, no-store').json({ reports: withLegacy });
+}));
+
+router.get('/:id/investigations', protect, asyncHandler(async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: 'The report ID is invalid.' });
+  const report = await Report.findById(req.params.id);
+  if (!(await ownerOrAdmin(req, res, report))) return;
+  const filter = { report: report._id };
+  if (req.user.role !== 'admin') filter.user = req.user._id;
+  const investigations = await Investigation.find(filter).sort({ createdAt: -1 }).limit(50).lean();
+  res.set('Cache-Control', 'private, no-store').json({ investigations });
+}));
+
 router.get('/map-data', mapReadLimit, asyncHandler(async (req, res) => {
   const cleanFilter = value => safeText(value, 80).replace(/[<>]/g, '');
   const selectedState = cleanFilter(req.query.state).toLocaleLowerCase();
@@ -358,7 +430,8 @@ router.get('/map-data', mapReadLimit, asyncHandler(async (req, res) => {
 }));
 
 router.get('/my', protect, asyncHandler(async (req, res) => {
-  const reports = await Report.find({ submittedBy: req.user._id }).populate('moderationHistory.by', 'name role').populate('reporterResponses.by', 'name').sort({ updatedAt: -1 }).select('-contactEmail').lean();
+  const rows = await Report.find({ submittedBy: req.user._id }).populate('moderationHistory.by', 'name role').populate('reporterResponses.by', 'name').sort({ updatedAt: -1 }).select('-contactEmail').lean();
+  const reports = await Promise.all(rows.map(includeLegacyEvidence));
   res.set('Cache-Control', 'private, no-store').json({ reports });
 }));
 
@@ -534,27 +607,15 @@ router.get('/', protect, adminOnly, asyncHandler(async (req, res) => {
   const fields = evidenceOnly
     ? 'reportId businessName status createdAt isDemo evidence evidenceAttachments'
     : 'reportId business businessName category location incidentDate fraudType status createdAt isDemo evidenceAttachments';
-  const reports = await Report.find(filter).select(fields).populate('submittedBy', 'name').sort({ createdAt: -1 }).limit(limit).lean();
+  const rows = await Report.find(filter).select(fields).populate('submittedBy', 'name').sort({ createdAt: -1 }).limit(limit).lean();
+  const reports = await Promise.all(rows.map(includeLegacyEvidence));
   res.json({ reports: reports.map(applyReporterPrivacy) });
-}));
-
-router.get('/business/:businessId', protect, adminOnly, asyncHandler(async (req, res) => {
-  const business = await Business.findById(req.params.businessId).select('name').lean();
-  if (!business) return res.status(404).json({ message: 'Business not found.' });
-  const reports = await Report.find({
-    status: { $ne: 'Draft' },
-    $or: [
-      { business: business._id },
-      { businessName: { $regex: `^${escapeRegex(business.name)}$`, $options: 'i' } },
-    ],
-  }).populate('submittedBy', 'name').populate('moderationHistory.by', 'name role').sort({ createdAt: -1 }).limit(100);
-  res.set('Cache-Control', 'private, no-store').json({ reports: reports.map(applyReporterPrivacy) });
 }));
 
 router.get('/:id/pdf', protect, asyncHandler(async (req, res) => {
   const report = await Report.findById(req.params.id).populate('submittedBy', 'name email').populate('moderationHistory.by', 'name role').populate('reporterResponses.by', 'name');
   if (!(await ownerOrAdmin(req, res, report))) return;
-  const pdf = makeCasePdf(req.user.role === 'admin' ? applyReporterPrivacy(report) : report);
+  const pdf = makeCasePdf(req.user.role === 'admin' ? applyReporterPrivacy(report) : report.isDemo ? redactDemoReporter(report) : report);
   res.status(200).type('application/pdf').set({ 'Content-Disposition': `attachment; filename="${report.reportId}-case-summary.pdf"`, 'Cache-Control': 'private, no-store' }).send(pdf);
 }));
 
@@ -562,26 +623,40 @@ router.get('/:id/evidence/:index', protect, asyncHandler(async (req, res) => {
   const report = await Report.findById(req.params.id);
   if (!(await ownerOrAdmin(req, res, report))) return;
   const index = Number(req.params.index);
-  const item = Number.isInteger(index) && index >= 0 ? report.evidenceAttachments[index] : null;
+  const item = Number.isInteger(index) && index >= 0
+    ? (report.evidenceAttachments[index] || (index === 0 && report.evidence ? { filename: path.basename(report.evidence), mimeType: mimeByExtension[path.extname(report.evidence).toLowerCase()] || 'application/octet-stream', quarantined: false } : null))
+    : null;
   if (!item) return res.status(404).json({ message: 'Evidence was not found.' });
   const isApk = item.quarantined === true || item.mimeType === apkMime;
   const safeName = path.basename(String(item.originalName || 'evidence').replace(/\\/g, '/')).replace(/[\r\n";]/g, '_');
+  if (item.storageProvider === 'cloudinary') {
+    if (!item.publicId) return res.status(404).json({ message: 'Cloud evidence metadata is incomplete.' });
+    const signedUrl = evidenceStorage.privateDownloadUrl(item.toObject ? item.toObject() : item, 900);
+    const upstream = await fetch(signedUrl, { redirect: 'error', signal: AbortSignal.timeout(30000) });
+    if (!upstream.ok || !upstream.body) return res.status(502).json({ message: 'Private cloud evidence is temporarily unavailable.' });
+    res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'", 'Content-Disposition': `inline; filename="${safeName}"`, 'Content-Type': isApk ? 'application/octet-stream' : item.mimeType });
+    if (upstream.headers.get('content-length')) res.set('Content-Length', upstream.headers.get('content-length'));
+    return pipeline(Readable.fromWeb(upstream.body), res);
+  }
+  const filePath = evidencePath(item);
+  if (!(await fs.stat(filePath).catch(() => null))) return res.status(404).json({ message: 'This evidence file is no longer available.' });
   res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'", 'Content-Disposition': `attachment; filename="${safeName}"` });
-  res.type(isApk ? 'application/octet-stream' : item.mimeType).sendFile(evidencePath(item));
+  res.type(isApk ? 'application/octet-stream' : item.mimeType).sendFile(filePath);
 }));
 
 router.get('/:id/evidence', protect, asyncHandler(async (req, res) => {
   const report = await Report.findById(req.params.id);
   if (!(await ownerOrAdmin(req, res, report))) return;
-  if (report.evidenceAttachments.length) return res.redirect(307, `/api/reports/${report._id}/evidence/0`);
-  if (!report.evidence) return res.status(404).json({ message: 'Evidence was not found.' });
-  res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'attachment' }).sendFile(path.join(uploadDir, path.basename(report.evidence)));
+  if (report.evidenceAttachments.length || report.evidence) return res.redirect(307, `/api/reports/${report._id}/evidence/0`);
+  return res.status(404).json({ message: 'Evidence was not found.' });
 }));
 
 router.get('/:id', protect, asyncHandler(async (req, res) => {
   const report = await Report.findById(req.params.id).populate('submittedBy', 'name email').populate('moderationHistory.by', 'name role').populate('reporterResponses.by', 'name');
   if (!(await ownerOrAdmin(req, res, report))) return;
-  res.set('Cache-Control', 'private, no-store').json({ report: req.user.role === 'admin' ? applyReporterPrivacy(report) : report });
+  const reportWithEvidence = await includeLegacyEvidence(report);
+  const response = req.user.role === 'admin' ? applyReporterPrivacy(reportWithEvidence) : report.isDemo ? redactDemoReporter(reportWithEvidence) : reportWithEvidence;
+  res.set('Cache-Control', 'private, no-store').json({ report: response });
 }));
 
 router.patch('/:id/status', protect, adminOnly, asyncHandler(async (req, res) => {

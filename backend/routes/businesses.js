@@ -14,27 +14,35 @@ function escapeRegex(value) {
 async function withCounts(list) {
   if (!list.length) return [];
   const ids = list.map(business => business._id);
-  const rows = await Report.aggregate([
-    { $match: { business: { $in: ids }, status: { $ne: 'Draft' } } },
-    { $group: {
-      _id: '$business',
-      reportCount: { $sum: 1 },
-      verifiedCount: { $sum: { $cond: [{ $eq: ['$status', 'Verified'] }, 1, 0] } },
-      inReviewCount: { $sum: { $cond: [{ $in: ['$status', ['Pending', 'Needs Information', 'Under Review']] }, 1, 0] } },
-    } },
-  ]);
-  const counts = new Map(rows.map(row => [String(row._id), row]));
+  const byId = new Map(list.map(business => [String(business._id), String(business._id)]));
+  const rows = await Report.find({ status: { $ne: 'Draft' }, business: { $in: ids } })
+    .select('business businessName status isDemo').lean();
+  const emptyStats = () => ({ total: 0, awaitingReview: 0, underInvestigation: 0, verified: 0, closed: 0, other: 0 });
+  const counts = new Map(list.map(business => [String(business._id), { community: emptyStats(), demo: emptyStats() }]));
+  for (const report of rows) {
+    const businessId = report.business && byId.has(String(report.business)) ? String(report.business) : null;
+    const stats = counts.get(businessId)?.[report.isDemo ? 'demo' : 'community'];
+    if (!stats) continue;
+    stats.total++;
+    if (['Pending', 'Needs Information'].includes(report.status)) stats.awaitingReview++;
+    else if (report.status === 'Under Review') stats.underInvestigation++;
+    else if (report.status === 'Verified') stats.verified++;
+    else if (['Rejected', 'Cancelled'].includes(report.status)) stats.closed++;
+    else stats.other++;
+  }
   return list.map(business => {
-    const data = counts.get(String(business._id)) || {};
-    const reportCount = data.reportCount || 0;
-    const verifiedCount = data.verifiedCount || 0;
-    const inReviewCount = data.inReviewCount || 0;
+    const data = counts.get(String(business._id)) || { community: emptyStats(), demo: emptyStats() };
+    const reportCount = data.community.total;
+    const verifiedCount = data.community.verified;
+    const inReviewCount = data.community.awaitingReview + data.community.underInvestigation;
     return {
       ...business.toObject(),
+      activity: data,
       reportCount,
       activeReportCount: inReviewCount,
       verifiedCount,
       inReviewCount,
+      demoReportCount: data.demo.total,
       risk: risk(reportCount, inReviewCount),
     };
   });
@@ -81,13 +89,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const businessRecord = await Business.findById(req.params.id);
   if (!businessRecord) return res.status(404).json({ message: 'Business not found.' });
   const [business] = await withCounts([businessRecord]);
-  // Public visitors only receive moderator-verified summary fields. Reporter data,
-  // evidence, and unreviewed case details stay private.
-  const reports = await Report.find({ business: businessRecord._id, status: 'Verified' })
-    .select('reportId fraudType incidentDate status createdAt isDemo')
-    .sort({ createdAt: -1 })
-    .lean();
-  res.set('Cache-Control', 'private, no-store').json({ business, reports });
+  res.set('Cache-Control', 'private, no-store').json({ business });
 }));
 
 router.post('/', protect, adminOnly, asyncHandler(async (req, res) => {

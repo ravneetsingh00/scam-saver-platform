@@ -3,9 +3,11 @@ const { body, validationResult } = require('express-validator');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
+const crypto = require('crypto');
 const User = require('../models/User');
 const asyncHandler = require('../utils/asyncHandler');
 const { protect } = require('../middleware/auth');
+const environmentAdminIdentity = require('../utils/environmentAdmin');
 
 const adminPasswordLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
 const validate = (req, res, next) => {
@@ -33,13 +35,17 @@ router.post('/login', [body('email').isEmail().normalizeEmail(), body('password'
   res.set('Cache-Control', 'no-store').json({ token: makeToken(account), user: safeUser(account) });
 }));
 
-// Password-only admin access is intentionally limited to the configured admin account and rate-limited.
+// Password-only admin access is checked against ADMIN_PASSWORD and remains rate-limited.
 router.post('/admin-login', adminPasswordLimit, [body('password').isString().isLength({ min: 8, max: 200 })], validate, asyncHandler(async (req, res) => {
-  const email = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
-  if (!email) return res.status(503).json({ message: 'Admin access is not configured. Set ADMIN_EMAIL in .env.' });
-  const account = await User.findOne({ email, role: 'admin' }).select('+password');
-  if (!account || !await bcrypt.compare(req.body.password, account.password)) return res.status(401).json({ message: 'Admin password is incorrect.' });
-  res.json({ token: makeToken(account), user: safeUser(account) });
+  const configuredPassword = process.env.ADMIN_PASSWORD;
+  if (!configuredPassword) return res.status(503).json({ message: 'Admin access is not configured. Set ADMIN_PASSWORD in the project root .env file.' });
+  // Compare fixed-length digests so this environment-backed login does not need a MongoDB account.
+  const suppliedDigest = crypto.createHash('sha256').update(req.body.password, 'utf8').digest();
+  const configuredDigest = crypto.createHash('sha256').update(configuredPassword, 'utf8').digest();
+  if (!crypto.timingSafeEqual(suppliedDigest, configuredDigest)) return res.status(401).json({ message: 'Admin password is incorrect.' });
+  const user = environmentAdminIdentity();
+  const token = jwt.sign({ sub: user._id, role: 'admin', authMode: 'environment-admin' }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
+  res.set('Cache-Control', 'no-store').json({ token, user: safeUser(user) });
 }));
 
 router.get('/me', protect, (req, res) => res.set('Cache-Control', 'private, no-store').json({ user: safeUser(req.user) }));

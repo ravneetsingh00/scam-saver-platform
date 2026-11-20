@@ -1,0 +1,12 @@
+.safety-check{margin:24px 0 30px;padding:24px;max-width:920px}
+.safety-check h2{margin:7px 0 6px}
+.safety-check>p{max-width:720px}
+.safety-check-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:18px 0}
+.safety-check-list label{display:flex;align-items:flex-start;gap:10px;padding:13px;border:1px solid var(--line);border-radius:11px;background:#0b1420;color:var(--text);font-weight:500;line-height:1.45}
+.safety-check-list input{accent-color:var(--red);width:17px;height:17px;flex:none;margin:2px 0 0}
+.safety-check-actions{display:flex;flex-wrap:wrap;gap:9px}
+.safety-check-result{min-height:48px;margin:14px 0 0;padding:12px 14px;border-radius:10px;background:#111d2a;color:#c5d2e1}
+.safety-check-result[data-level="pause"]{background:#2b2115;border:1px solid #674c28;color:#f1d9a5}
+.safety-check-result[data-level="urgent"]{background:#2a171d;border:1px solid #713c45;color:#ffd0d3}
+:root[data-theme="light"] .safety-check-list label{background:#f7faff}
+@media(max-width:650px){.safety-check{padding:18px}.safety-check-list{grid-template-columns:1fr}}

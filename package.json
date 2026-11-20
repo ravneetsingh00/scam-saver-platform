@@ -8,11 +8,15 @@
     "start": "node backend/server.js",
     "dev": "nodemon backend/server.js",
     "seed": "node backend/seed.js",
-    "demo:media": "node backend/demoMedia.js",
-    "test": "node --test backend/tests/*.test.js"
+    "test": "node --test backend/tests/*.test.js",
+    "migrate:check": "node backend/migrate-database.js",
+    "migrate:local": "node backend/migrate-database.js --apply",
+    "evidence:migrate:check": "node backend/migrate-evidence-to-cloud.js",
+    "evidence:migrate": "node backend/migrate-evidence-to-cloud.js --apply"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.11.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

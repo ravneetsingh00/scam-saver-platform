@@ -13,6 +13,13 @@ const findingSchema = new mongoose.Schema({
 
 const schema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  business: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', default: null, index: true },
+  report: { type: mongoose.Schema.Types.ObjectId, ref: 'Report', default: null, index: true },
+  status: { type: String, enum: ['In Progress', 'Completed'], default: undefined },
+  assignedModerator: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  moderatorNotes: { type: String, default: '', maxlength: 5000 },
+  outcome: { type: String, default: '', maxlength: 2000 },
+  timeline: [{ action: { type: String, required: true, maxlength: 100 }, note: { type: String, default: '', maxlength: 1000 }, at: { type: Date, default: Date.now } }],
   businessName: { type: String, required: true, trim: true, maxlength: 120 },
   category: { type: String, required: true, trim: true, maxlength: 80 },
   location: { type: String, required: true, trim: true, maxlength: 100 },

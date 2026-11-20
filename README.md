@@ -32,15 +32,9 @@
    npm run seed
    ```
 
-   Seeding resets existing Scam Saver users, businesses and reports in the configured database. Run it only against a development/demo database.
+   The seed script adds or updates fictional demo businesses and reports without deleting existing users or reports. It uses an existing account and does not create an administrator. Run it only against a development/demo database; the records are clearly marked fictional.
 
-   To add clearly labeled synthetic evidence to empty demo cases without resetting the database, run:
-
-   ```bash
-   npm run demo:media
-   ```
-
-   This safe incremental command only updates reports marked `isDemo: true`, and skips any demo case that already has evidence. It attaches two fictional PNG illustrations and a generated alert-tone WAV. The audio is not a real call recording. Real user reports and their attachments are never modified.
+   Fictional demo reports intentionally contain no uploaded evidence. Do not attach synthetic files to demo businesses; upload evidence only with a real test report or a user's genuine submission.
 
 6. Start the application:
 
@@ -51,6 +45,10 @@
 7. Open [http://localhost:3000](http://localhost:3000).
 
 The Express process serves the frontend and `/api` from the same origin. Run `npm test` for report schema and case PDF checks. Use `npm run dev` for automatic restarts while developing.
+
+For a safe local-to-Atlas recovery, `npm run migrate:check` performs a read-only preflight, then `npm run migrate:local` imports source users, businesses, reports and investigations into the explicitly named `Scam-Saver` database with original IDs and relationships. The importer requires the protected `.local-backups` pre-migration backups, refuses conflicting IDs or natural keys, uses insert-only upserts, and can be rerun without duplicating records. It does not copy evidence into MongoDB: files remain under `backend/uploads` and must be copied separately to persistent storage when deploying to another machine.
+
+Evidence files are private and are served only through authenticated report endpoints; the upload directory is never exposed as static public content. Local development uses `backend/uploads` by default, which persists across local server restarts. On Render or another host with ephemeral storage, attach a persistent disk (for Render, for example, mounted at `/var/data`) and configure the backend environment variable `UPLOAD_DIR=/var/data/uploads`. Copy any existing upload files, including the `quarantine` subdirectory, into that persistent directory before switching the configured path. No MongoDB schema migration is needed for evidence metadata.
 
 ## Demo accounts
 
@@ -70,7 +68,7 @@ The seed creates eight fictional businesses and ten fictional reports. Demo cont
 - User case tracking with review history and additional-information replies; the admin review dashboard supports Needs Information, Under Review, Verified, Rejected and Cancelled decisions, full case/evidence review, moderation history, deletion with evidence cleanup, status/search filters, and PDF summaries
 - Authenticated AI Investigation Assistant using the OpenAI Responses API and web search, plus an optional report-writing assistant that drafts neutral incident wording and requires explicit reporter approval
 - The AI investigation workflow searches only public business information and never sends reporter identity or submitted report descriptions; it separates sourced facts from public claims and warning signs and does not make guilt/safety determinations. The optional report-writing assistant sends the reporter-provided narrative to OpenAI with `store: false` to create wording; the UI warns users to remove names/private details first, and sensitive contact and credential patterns are scrubbed server-side.
-- MongoDB connection failure exits with a clear error and setup guidance rather than simulating persistence
+- MongoDB connection failure logs setup guidance while allowing the website and environment-password admin sign-in to start; database-backed features remain unavailable until MongoDB connects
 - Basic API rate limiting for authentication, Helmet headers and configurable CORS
 
 ## API overview
@@ -92,4 +90,4 @@ The seed creates eight fictional businesses and ten fictional reports. Demo cont
 
 ## Admin panel and local password
 
-Use the **Admin Panel** link in the site header to open the password gate. The password is requested for every panel entry, including a refresh or direct URL visit. The locally configured admin password is `12121212`; it is verified against the configured admin account's bcrypt hash, with five failed attempts allowed per 15-minute window. This short password is for this local demo only. Change `ADMIN_PASSWORD` in `.env` and update the admin account hash before any shared or production deployment. The admin role is still enforced on every admin API request.
+Use the **Admin Panel** link in the site header to open the password gate. The password is requested for every panel entry, including a refresh or direct URL visit. Admin sign-in compares the submitted password with `ADMIN_PASSWORD` from the project root `.env` and does not require an administrator record in MongoDB. The login is rate limited to five failed attempts per 15-minute window. A signed, short-lived admin token is issued after a successful comparison, and admin API routes continue to enforce the admin role. MongoDB is still required for database-backed admin pages and actions; the web server and password check can start while MongoDB is unavailable.

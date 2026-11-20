@@ -44,7 +44,7 @@
         <div class="business-card-badges">${business.isDemo ? '<span class="pill blue">DEMO SAMPLE</span>' : ''}${riskBadge(business.risk)}</div>
       </header>
       <dl class="business-card-fields">${details.map(([label,value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>
-      <div class="business-card-counts"><span>${total} community ${total === 1 ? 'report' : 'reports'}</span><span>${verified} verified</span><span>${review} awaiting review</span>${other ? `<span>${other} other review outcomes</span>` : ''}</div>
+      <div class="business-card-counts"><span>${total} community ${total === 1 ? 'report' : 'reports'}</span><span>${verified} verified</span><span>${review} pending review</span><span>${other} other review outcomes</span>${Number(business.demoReportCount) ? `<span>${Number(business.demoReportCount)} fictional demo ${Number(business.demoReportCount) === 1 ? 'sample' : 'samples'}</span>` : ''}</div>
       <div class="business-card-record"><span>Record ID <code>${escapeHtml(business._id)}</code></span><span>Added ${escapeHtml(formatDate(business.createdAt))}</span></div>
       <a class="btn secondary" href="business-details.html?id=${encodeURIComponent(business._id || '')}">View full details <span aria-hidden="true">→</span></a>
     </article>`;

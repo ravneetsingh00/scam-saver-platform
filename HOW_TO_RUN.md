@@ -28,9 +28,9 @@ cp .env.example .env
 
 Open `.env` in VS Code and set the values you need:
 
-- `MONGODB_URI`: local MongoDB is `mongodb://127.0.0.1:27017/scam-saver`; for MongoDB Atlas, paste your Atlas connection string instead.
+- `MONGODB_URI`: local MongoDB is `mongodb://127.0.0.1:27017/scam-saver`; for Atlas, include the intended database name at the end of the URI (for this project, `/Scam-Saver`).
 - `JWT_SECRET`: replace the example with a long random secret. On macOS, generate one with `openssl rand -base64 32`.
-- `ADMIN_EMAIL` and `ADMIN_PASSWORD`: set the initial administrator login before creating the admin account.
+- `ADMIN_PASSWORD`: set the password for the password-only Admin Panel login. `ADMIN_EMAIL` and `ADMIN_NAME` provide the displayed administrator identity; an admin MongoDB account is not needed to sign in.
 - `GEMINI_API_KEY`: add your Gemini API key here if you want to use SCAM SAVER AI. Keep `.env` private; it is excluded from Git.
 - `PORT`: defaults to `3000`.
 
@@ -38,7 +38,7 @@ Do not paste real keys or passwords into `.env.example` or commit `.env` to GitH
 
 ## 4. Start MongoDB
 
-Scam Saver needs MongoDB running before the Node.js server starts.
+MongoDB is needed for database-backed features. The website and password-only Admin Panel sign-in can start without a MongoDB connection. Start MongoDB before using reports, account data, and admin review actions.
 
 ### Local MongoDB
 
@@ -60,17 +60,21 @@ Exit the MongoDB shell with `exit`.
 
 If using Atlas, there is no local MongoDB server to start. Set `MONGODB_URI` in `.env` to the Atlas connection string, and make sure the Atlas database user and network access settings allow your computer to connect.
 
-## 5. Create the initial admin account (first setup only)
+## 5. Optional development demo records
 
-If you need the seeded administrator account and sample records, first set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env`, then run:
+To add the clearly labeled fictional sample businesses and reports to a development database, run:
 
 ```bash
 npm run seed
 ```
 
-**Important:** `npm run seed` clears existing users, businesses, and reports before adding demo records. Only run it on a new/empty database. Do not run it later if you need to preserve project data.
+`npm run seed` does not delete existing users or reports and does not create an administrator. Demo reports contain no uploaded evidence. Never attach synthetic media as if it were evidence from a real user.
 
 Regular users can register through the website’s **Create account** page.
+
+If you are moving existing local data into Atlas, the migration checks are `npm run migrate:check` followed by `npm run migrate:local`. The importer requires a verified pre-migration backup, preserves existing records, and is safe to rerun. It imports database documents and relationships only; evidence files remain private files under `backend/uploads` and must be moved separately if the app runs on another machine.
+
+Evidence files are stored privately under `backend/uploads` by default. A local server restart does not remove them. For Render, attach a persistent disk mounted at `/var/data` and set `UPLOAD_DIR=/var/data/uploads` in that service's environment; copy existing upload files and the `quarantine` directory into the mounted path before switching over.
 
 ## 6. Start Scam Saver
 
@@ -80,7 +84,7 @@ In a new VS Code terminal at the project root, run:
 npm start
 ```
 
-Wait for the terminal to show that MongoDB connected and Scam Saver is running. Leave this terminal open while using the site. For development with automatic server restarts after backend code changes, run:
+Wait for the terminal to show that Scam Saver is running. If MongoDB is unavailable, the server logs that database-backed features are offline; password-only Admin Panel sign-in remains available. Leave this terminal open while using the site. For development with automatic server restarts after backend code changes, run:
 
 ```bash
 npm run dev

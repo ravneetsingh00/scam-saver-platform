@@ -2,7 +2,9 @@
   'use strict';
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const token = () => localStorage.getItem('ss_token') || '';
+  const token = () => localStorage.getItem('ss_admin_token') || localStorage.getItem('ss_token') || '';
+  const activeTokenIsAdmin = () => Boolean(localStorage.getItem('ss_admin_token'));
+  const clearActiveSession = () => { if (activeTokenIsAdmin()) { localStorage.removeItem('ss_admin_token'); localStorage.removeItem('ss_admin_user'); } else { localStorage.removeItem('ss_token'); localStorage.removeItem('ss_user'); } };
   const state = { user: null, reports: [], businessesPage: 1, businessPages: 1, userList: [], stats: null, actionReport: null, action: null, loaded: new Set(), busy: false, objectUrls: [] };
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
   const date = value => value ? new Date(value).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' }) : '—';
@@ -16,7 +18,7 @@
     const type = response.headers.get('content-type') || '';
     const data = type.includes('application/json') ? await response.json().catch(() => ({})) : await response.blob();
     if (!response.ok) {
-      if (response.status === 401) { localStorage.removeItem('ss_token'); localStorage.removeItem('ss_user'); location.replace('login.html?next=admin.html'); }
+      if (response.status === 401) { clearActiveSession(); location.replace('admin-login.html?next=admin.html'); }
       if (response.status === 403) { message('Administrator access is required for this section.', true); }
       throw new Error(data?.message || `Request failed (${response.status}).`);
     }
@@ -63,7 +65,11 @@
   function evidenceItem(report, file, index) {
     const type = fileKind(file); const rid = esc(report._id || ''); const fname = esc(file.originalName || file.filename || 'Evidence file');
     const action = type === 'apk' || type === 'executable' ? 'Quarantined download' : 'Preview';
-    const preview = type === 'image' && index >= 0 ? `<button class="admin-evidence-preview" type="button" data-evidence="${rid}" data-evidence-index="${index}" aria-label="Preview ${fname}"><span data-preview-image="${rid}:${index}">Image preview loads securely on screen</span></button>` : `<span class="admin-evidence-preview">${type === 'apk' || type === 'executable' ? 'QUARANTINED · DOWNLOAD ONLY' : esc(type.toUpperCase())}</span>`;
+    let preview;
+    if (index >= 0 && type === 'image') preview = `<button class="admin-evidence-preview" type="button" data-evidence="${rid}" data-evidence-index="${index}" aria-label="Preview ${fname}"><span data-preview-image="${rid}:${index}">Secure image preview loading…</span></button>`;
+    else if (index >= 0 && type === 'audio') preview = `<div class="admin-evidence-preview admin-evidence-audio-wrap"><audio controls preload="none" data-preview-audio="${rid}:${index}" aria-label="Audio evidence: ${fname}"></audio><small data-audio-duration></small></div>`;
+    else if (index >= 0 && String(file.mimeType || '').startsWith('video/')) preview = `<video class="admin-evidence-preview admin-evidence-video" controls playsinline preload="none" data-preview-video="${rid}:${index}" aria-label="Video evidence: ${fname}"></video>`;
+    else preview = `<span class="admin-evidence-preview">${type === 'apk' || type === 'executable' ? 'QUARANTINED · DOWNLOAD ONLY' : esc(type.toUpperCase())}</span>`;
     return `<article class="admin-evidence-file ${type === 'apk' || type === 'executable' ? 'is-quarantined' : ''}">${preview}<strong title="${fname}">${fname}</strong><small>${esc(file.mimeType || type)} · ${file.size ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : 'size unavailable'} · ${date(file.uploadedAt || report.createdAt)}</small><div class="admin-evidence-controls">${index >= 0 ? `<button type="button" data-evidence="${rid}" data-evidence-index="${index}">${action}</button>` : `<button type="button" data-legacy-evidence="${rid}">Download</button>`}</div></article>`;
   }
   function renderRecent(reports) {
@@ -105,14 +111,22 @@
     loadEvidenceThumbnails(target);
   }
   function loadEvidenceThumbnails(root) {
-    const placeholders = $$('[data-preview-image]',root);
-    const observer = new IntersectionObserver(entries => entries.forEach(async entry => {
-      if (!entry.isIntersecting) return;
-      const node=entry.target; observer.unobserve(node);
-      try { const [id,index]=node.dataset.previewImage.split(':'); const blob=await evidenceBlob(id,index); const url=URL.createObjectURL(blob); state.objectUrls.push(url); const image=new Image(); image.src=url; image.alt='Uploaded image evidence preview'; node.replaceWith(image); }
-      catch { node.textContent='Preview unavailable'; }
-    }), {rootMargin:'80px'});
-    placeholders.forEach(node=>observer.observe(node));
+    loadEvidenceMedia(root);
+  }
+  function loadEvidenceMedia(root) {
+    const media=$$('[data-preview-image],[data-preview-audio],[data-preview-video]',root);
+    const load=async node=>{
+      const key=node.dataset.previewImage||node.dataset.previewAudio||node.dataset.previewVideo;
+      try{
+        const [id,index]=key.split(':');const blob=await evidenceBlob(id,index);const url=URL.createObjectURL(blob);state.objectUrls.push(url);
+        if(node.hasAttribute('data-preview-image')){const image=new Image();image.src=url;image.alt='Uploaded image evidence preview';image.addEventListener('error',()=>{const fallback=document.createElement('span');fallback.className='admin-evidence-media-fallback';fallback.textContent='Image preview unavailable';image.replaceWith(fallback)},{once:true});node.replaceWith(image);return}
+        node.src=url;
+        if(node instanceof HTMLAudioElement)node.addEventListener('loadedmetadata',()=>{const label=node.parentElement.querySelector('[data-audio-duration]');if(label)label.textContent=`Duration ${Math.floor(node.duration/60)}:${String(Math.floor(node.duration%60)).padStart(2,'0')}`},{once:true});
+        node.addEventListener('error',()=>{const fallback=document.createElement('span');fallback.className='admin-evidence-media-fallback';fallback.textContent=node instanceof HTMLAudioElement?'Audio preview unavailable':'Video preview unavailable';node.replaceWith(fallback)},{once:true});
+      }catch{if(node.hasAttribute('data-preview-image'))node.textContent='Image preview unavailable';else{const fallback=document.createElement('span');fallback.className='admin-evidence-media-fallback';fallback.textContent=node instanceof HTMLAudioElement?'Audio preview unavailable':'Video preview unavailable';node.replaceWith(fallback)}}
+    };
+    if('IntersectionObserver'in window){const observer=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){observer.unobserve(entry.target);load(entry.target)}}),{rootMargin:'100px'});media.forEach(node=>observer.observe(node))}
+    else media.forEach(load);
   }
   async function loadBusinesses() {
     setLoading('manageBusinesses');
@@ -177,10 +191,12 @@
       return fields ? `<section class="admin-detail-group"><h3>${esc(title)}</h3><dl class="admin-detail-list">${fields}</dl></section>` : '';
     };
     const history = (report.moderationHistory || []).map(item => `<li><strong>${esc(item.action)}</strong><span>${date(item.createdAt)}${item.by?.name ? ` · ${esc(item.by.name)}` : ''}</span>${item.note ? `<p>${esc(item.note)}</p>` : ''}</li>`).join('');
-    const evidence = (report.evidenceAttachments || []).map((item,index) => `<li>${esc(item.originalName || item.filename)} · ${number(item.size)} bytes <button type="button" class="admin-text-button" data-evidence="${esc(report._id)}" data-evidence-index="${index}">Preview / download</button></li>`).join('');
+    const evidence = (report.evidenceAttachments || []).map((item,index) => evidenceItem(report,item,index)).join('');
     $('#reportDialogTitle').textContent = report.reportId || 'Report details';
-    $('#reportDetails').innerHTML = `<h3>Case summary</h3><dl class="admin-detail-list">${groups}</dl><div class="admin-detail-groups">${nestedGroup('Business details',report.businessDetails)}${nestedGroup('Incident details',report.incidentDetails)}${nestedGroup('Previous complaints',report.previousComplaints)}${nestedGroup('Reporter details',report.reporter,['hideNameFromPublic','shareContactWithModerators'])}</div>${history ? `<h3>Moderation history</h3><ol class="admin-timeline">${history}</ol>` : ''}${report.reporterResponses?.length ? `<h3>Reporter responses</h3><ul>${report.reporterResponses.map(r => `<li>${esc(r.text)} · ${date(r.createdAt)}</li>`).join('')}</ul>` : ''}${evidence ? `<h3>Private evidence</h3><ul>${evidence}</ul>` : ''}`;
+    state.reports = [...state.reports.filter(item => item._id !== report._id), report];
+    $('#reportDetails').innerHTML = `<h3>Case summary</h3><dl class="admin-detail-list">${groups}</dl><div class="admin-detail-groups">${nestedGroup('Business details',report.businessDetails)}${nestedGroup('Incident details',report.incidentDetails)}${nestedGroup('Previous complaints',report.previousComplaints)}${nestedGroup('Reporter details',report.reporter,['hideNameFromPublic','shareContactWithModerators'])}</div>${history ? `<h3>Moderation history</h3><ol class="admin-timeline">${history}</ol>` : ''}${report.reporterResponses?.length ? `<h3>Reporter responses</h3><ul>${report.reporterResponses.map(r => `<li>${esc(r.text)} · ${date(r.createdAt)}</li>`).join('')}</ul>` : ''}<h3>Private evidence</h3>${evidence ? `<div class="admin-evidence-files admin-detail-evidence">${evidence}</div>` : '<p class="admin-muted">No evidence files were attached to this report.</p>'}`;
     $('#adminReportDialog').showModal();
+    loadEvidenceMedia($('#reportDetails'));
   }
   async function showReport(id) { try { const data = await api(`/api/reports/${encodeURIComponent(id)}`); fillReport(data.report); } catch (error) { message(error.message, true); } }
   function confirm(title, copy, button = 'Confirm') {
@@ -226,8 +242,8 @@
   async function refreshCurrent() { state.loaded.delete('overview'); state.loaded.delete('reports'); state.loaded.delete('evidence'); state.loaded.delete('businesses'); state.loaded.delete('users'); state.loaded.delete('analytics'); state.loaded.delete('map'); await loadSection(location.hash.slice(1) || 'overview',true); }
 
   function initialize() {
-    let user={}; try { user=JSON.parse(localStorage.getItem('ss_user') || '{}'); } catch {}
-    if (!token()) { location.replace('login.html?next=admin.html'); return; }
+    let user={}; try { user=JSON.parse(localStorage.getItem('ss_admin_user') || localStorage.getItem('ss_user') || '{}'); } catch {}
+    if (!token()) { location.replace('admin-login.html?next=admin.html'); return; }
     state.user=user; $('#userGreeting').textContent=user.name ? `Hi, ${user.name}` : ''; $('#adminWelcome').textContent=user.name ? `Welcome, ${user.name}` : 'Administrator overview';
     const userRole=String(user.role || '').toLowerCase();
     $('#adminThemeToggle').checked=localStorage.getItem('ss_theme') === 'light';
@@ -238,7 +254,7 @@
     $('#reportFilters').addEventListener('submit',event=>{event.preventDefault();loadSection('reports',true)}); $('#reportSearch').addEventListener('input',renderReportResults); $('#reportStatus').addEventListener('change',renderReportResults); $('#reportSort').addEventListener('change',renderReportResults); $('#clearReportFilters').addEventListener('click',()=>{ $('#reportSearch').value=''; $('#reportStatus').value=''; $('#reportSort').value='newest'; renderReportResults(); });
     $('#evidenceSearch').addEventListener('input',renderEvidenceResults); $('#evidenceType').addEventListener('change',renderEvidenceResults); $('#businessFilters').addEventListener('submit',event=>{event.preventDefault();state.businessesPage=1;loadSection('businesses',true)}); $('#businessPrev').addEventListener('click',()=>{state.businessesPage=Math.max(1,state.businessesPage-1);loadSection('businesses',true)}); $('#businessNext').addEventListener('click',()=>{state.businessesPage=Math.min(state.businessPages,state.businessesPage+1);loadSection('businesses',true)}); $('#businessForm').addEventListener('submit',saveBusiness); $('#resetBusinessForm').addEventListener('click',()=>resetBusiness()); $('#cancelBusinessEdit').addEventListener('click',()=>resetBusiness(true)); $('#showBusinessForm').addEventListener('click',()=>{ $('#businessForm').hidden=false; $('#businessForm').scrollIntoView({behavior:'smooth',block:'center'}); }); $('#userSearch').addEventListener('input',renderUsers); $('#reportActionForm').addEventListener('submit',runReportAction); $('#downloadFraudPdf').addEventListener('click',downloadPdf);
     $('#adminThemeToggle').addEventListener('change',event=>{const theme=event.target.checked?'light':'dark';localStorage.setItem('ss_theme',theme);document.documentElement.dataset.theme=theme;}); $('#adminAutoRefresh').addEventListener('change',event=>{localStorage.setItem('ss_admin_auto_refresh',String(event.target.checked));});
-    $('#adminLogout').addEventListener('click',async()=>{if(!await confirm('Log out?', 'End this administrator session on this browser.', 'Log out'))return;localStorage.removeItem('ss_token');localStorage.removeItem('ss_user');location.replace('login.html');});
+    $('#adminLogout').addEventListener('click',async()=>{if(!await confirm('Log out?', 'End this administrator session on this browser.', 'Log out'))return;clearActiveSession();location.replace('admin-login.html');});
     document.addEventListener('click',event=>{
       const target=event.target.closest('button'); if(!target)return;
       if(target.dataset.openView) selectTab(target.dataset.openView);
@@ -260,5 +276,12 @@
     if ($('#adminAutoRefresh').checked) state.autoRefresh=setInterval(()=>{if(!document.hidden)refreshCurrent();},60000);
     $('#adminAutoRefresh').addEventListener('change',()=>{clearInterval(state.autoRefresh);if($('#adminAutoRefresh').checked)state.autoRefresh=setInterval(()=>{if(!document.hidden)refreshCurrent();},60000);});
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',initialize,{once:true}); else initialize();
+  function bootAfterAuthorization() {
+    if (document.documentElement.classList.contains('auth-checking')) {
+      window.addEventListener('scam-saver:auth-ready', initialize, { once:true });
+      return;
+    }
+    initialize();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',bootAfterAuthorization,{once:true}); else bootAfterAuthorization();
 })();

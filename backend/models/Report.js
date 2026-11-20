@@ -31,11 +31,17 @@ const incidentDetailsSchema = new mongoose.Schema({
 const evidenceSchema = new mongoose.Schema({
   filename: { type: String, required: true },
   originalName: { type: String, required: true, maxlength: 180 },
-  mimeType: { type: String, required: true, enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'video/mp4', 'video/webm', 'video/quicktime', 'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/webm', 'application/vnd.android.package-archive'] },
+  mimeType: { type: String, required: true, enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'video/mp4', 'video/webm', 'video/quicktime', 'audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/wav', 'audio/ogg', 'audio/webm', 'application/vnd.android.package-archive'] },
   size: { type: Number, required: true, min: 1 },
   uploadedAt: { type: Date, default: Date.now },
   description: { type: String, default: '', maxlength: 240 },
   quarantined: { type: Boolean, default: false },
+  storageProvider: { type: String, enum: ['local', 'cloudinary'], default: 'local' },
+  secureUrl: { type: String, default: '', maxlength: 1500 },
+  publicId: { type: String, default: '', maxlength: 300 },
+  resourceType: { type: String, enum: ['image', 'video', 'raw', ''], default: '' },
+  deliveryType: { type: String, enum: ['authenticated', ''], default: '' },
+  format: { type: String, default: '', maxlength: 20 },
 }, { _id: false });
 
 const historySchema = new mongoose.Schema({

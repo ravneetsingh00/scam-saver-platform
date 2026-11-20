@@ -1,2 +1,125 @@
-require('dotenv').config();const mongoose=require('mongoose');const bcrypt=require('bcryptjs');const User=require('./models/User');const Business=require('./models/Business');const Report=require('./models/Report');const makeId=require('./utils/reportId');
-(async()=>{try{if(!process.env.MONGODB_URI||!process.env.ADMIN_EMAIL||!process.env.ADMIN_PASSWORD)throw new Error('Set MONGODB_URI, ADMIN_EMAIL and ADMIN_PASSWORD in .env before seeding.');await mongoose.connect(process.env.MONGODB_URI);await User.deleteMany({});await Business.deleteMany({});await Report.deleteMany({});const pw=await bcrypt.hash(process.env.ADMIN_PASSWORD,12);const admin=await User.create({name:process.env.ADMIN_NAME||'Scam Saver Admin',email:process.env.ADMIN_EMAIL,password:pw,role:'admin'});const users=await User.create(await Promise.all(['Avery Morgan','Jordan Lee','Riley Carter'].map(async(name,i)=>({name,email:`demo${i+1}@scamsaver.test`,password:await bcrypt.hash('DemoPass123!',12),role:'user'}))));const rows=[['Northstar Gadgets','Mira Vale','Electronics','Portland, OR'],['Cedar Lane Realty','Theo Finch','Real Estate','Austin, TX'],['BrightPath Careers','Nia Brooks','Employment','Denver, CO'],['Harborlight Exchange','Eli Rowan','Financial Services','Boston, MA'],['Juniper Home Market','Sage Ellis','Home Goods','Madison, WI'],['Orbit Mobile Deals','Remy Quinn','Electronics','Phoenix, AZ'],['MapleKey Rentals','Ari Bell','Property','Raleigh, NC'],['Bluebird Wellness','Noah Reed','Health & Wellness','Seattle, WA']];const businesses=await Business.create(rows.map(([name,ownerName,category,location])=>({name,ownerName,category,location,description:'Fictional demo business created to demonstrate Scam Saver review workflows.',isDemo:true})));const types=['Online Shopping Fraud','Property Fraud','Job Fraud','Payment Fraud','Investment Fraud','Identity Fraud','Other','Online Shopping Fraud','Property Fraud','Payment Fraud'];const statuses=['Pending','Verified','Rejected','Pending','Verified','Pending','Verified','Rejected','Pending','Verified'];const demos=Array.from({length:10},(_,i)=>({reportId:makeId(),submittedBy:users[i%3]._id,business:businesses[i%8]._id,businessName:businesses[i%8].name,category:businesses[i%8].category,location:businesses[i%8].location,incidentDate:new Date(Date.now()-(i+1)*86400000),fraudType:types[i],amount:i%2?null:125+i*40,description:`Fictional demonstration report ${i+1}. This sample describes a reported concern for review and is not a claim about a real person or business.`,contactEmail:users[i%3].email,status:statuses[i],adminNote:statuses[i]==='Rejected'?'Demo rejection: insufficient supporting documentation.':'',isDemo:true}));await Report.create(demos);console.log(`Seed complete: admin ${admin.email}; 3 demo users (demo1–3@scamsaver.test / DemoPass123!); 8 fictional businesses; 10 fictional reports.`);await mongoose.disconnect();}catch(e){console.error(`Seed failed: ${e.message}`);process.exitCode=1;}})();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+
+const mongoose = require('mongoose');
+const User = require('./models/User');
+const Business = require('./models/Business');
+const Report = require('./models/Report');
+
+const businessesData = [
+  ['Northstar Gadgets', 'Mira Vale', 'Electronics', 'Portland, OR'],
+  ['Cedar Lane Realty', 'Theo Finch', 'Real Estate', 'Austin, TX'],
+  ['BrightPath Careers', 'Nia Brooks', 'Employment', 'Denver, CO'],
+  ['Harborlight Exchange', 'Eli Rowan', 'Financial Services', 'Boston, MA'],
+  ['Juniper Home Market', 'Sage Ellis', 'Home Goods', 'Madison, WI'],
+  ['Orbit Mobile Deals', 'Remy Quinn', 'Electronics', 'Phoenix, AZ'],
+  ['MapleKey Rentals', 'Ari Bell', 'Property', 'Raleigh, NC'],
+  ['Bluebird Wellness', 'Noah Reed', 'Health & Wellness', 'Seattle, WA']
+];
+
+const fraudTypes = [
+  'Online Shopping Fraud',
+  'Property Fraud',
+  'Job Fraud',
+  'Payment Fraud',
+  'Investment Fraud',
+  'Identity Fraud',
+  'Other',
+  'Online Shopping Fraud',
+  'Property Fraud',
+  'Payment Fraud'
+];
+
+const statuses = [
+  'Pending', 'Verified', 'Rejected', 'Pending', 'Verified',
+  'Pending', 'Verified', 'Rejected', 'Pending', 'Verified'
+];
+
+async function seedDemoData() {
+  try {
+    if (!process.env.MONGODB_URI) {
+      throw new Error('MONGODB_URI is missing from your .env file.');
+    }
+
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log('Connected to MongoDB.');
+
+    // Use an existing account. Do not delete or create users.
+    const user = await User.findOne().sort({ createdAt: 1 });
+
+    if (!user) {
+      throw new Error('No user exists. Create an account before seeding demo data.');
+    }
+
+    const businesses = [];
+
+    // Add businesses without replacing existing records.
+    for (const [name, ownerName, category, location] of businessesData) {
+      const business = await Business.findOneAndUpdate(
+        { name, isDemo: true },
+        {
+          $setOnInsert: {
+            name,
+            ownerName,
+            category,
+            location,
+            description:
+              'Fictional demonstration business created for Scam Saver project testing. Not a real business.',
+            isDemo: true
+          }
+        },
+        { upsert: true, new: true }
+      );
+
+      businesses.push(business);
+    }
+
+    console.log(`Businesses ready: ${businesses.length}`);
+
+    // Add reports with stable IDs so rerunning this script won't duplicate them.
+    for (let i = 0; i < 10; i++) {
+      const business = businesses[i % businesses.length];
+      const reportId = `DEMO-SS-${String(i + 1).padStart(3, '0')}`;
+
+      await Report.updateOne(
+        { reportId },
+        {
+          $setOnInsert: {
+            reportId,
+            submittedBy: user._id,
+            business: business._id,
+            businessName: business.name,
+            category: business.category,
+            location: business.location,
+            incidentDate: new Date(Date.now() - (i + 1) * 86400000),
+            fraudType: fraudTypes[i],
+            amount: i % 2 === 0 ? 125 + i * 40 : null,
+            amountCurrency: 'INR',
+            description:
+              `Fictional demonstration report ${i + 1}. This sample is for demonstrating Scam Saver review workflows and is not a real allegation.`,
+            contactEmail: user.email || '',
+            status: statuses[i],
+            adminNote:
+              statuses[i] === 'Rejected'
+                ? 'Demo rejection: insufficient supporting documentation.'
+                : '',
+            isDemo: true
+          }
+        },
+        { upsert: true }
+      );
+    }
+
+    console.log('Successfully added or checked 8 demo businesses and 10 demo reports.');
+  } catch (error) {
+    const authFailure = error.codeName === 'AuthenticationFailed' || /bad auth|authentication failed/i.test(error.message || '');
+    console.error('Demo seed failed:', authFailure
+      ? 'MongoDB authentication failed. Reset the database user password in MongoDB Atlas and update MONGODB_URI in your local .env.'
+      : error.message);
+    process.exitCode = 1;
+  } finally {
+    await mongoose.disconnect();
+  }
+}
+
+seedDemoData();

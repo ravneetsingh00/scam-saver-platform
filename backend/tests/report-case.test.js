@@ -36,12 +36,13 @@ test('the structured case record validates and stores moderation history and att
       { filename: 'private-id.jpg', originalName: 'receipt.jpg', mimeType: 'image/jpeg', size: 1024, description: 'Payment receipt' },
       { filename: 'private-clip.mp4', originalName: 'screen-recording.mp4', mimeType: 'video/mp4', size: 2048, description: 'Screen recording' },
       { filename: 'private-audio.mp3', originalName: 'call-recording.mp3', mimeType: 'audio/mpeg', size: 3072, description: 'Call recording' },
+      { filename: 'private-audio.aac', originalName: 'voice-note.aac', mimeType: 'audio/aac', size: 4096, description: 'Voice recording' },
     ],
     moderationHistory: [{ action: 'Needs Information', note: 'Please add the official complaint number.', by: submittedBy() }],
     reporterResponses: [{ text: 'The official complaint reference is ABC-123.', by: submittedBy() }],
   });
   assert.equal(report.validateSync(), undefined);
-  assert.equal(report.evidenceAttachments.length, 3);
+  assert.equal(report.evidenceAttachments.length, 4);
   assert.equal(report.moderationHistory[0].action, 'Needs Information');
   assert.equal(report.reporterResponses.length, 1);
 });

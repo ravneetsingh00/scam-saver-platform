@@ -10,6 +10,8 @@
   const sendButton = document.getElementById('investigationSend');
   const stopButton = document.getElementById('investigationStop');
   const statusEl = document.getElementById('investigationServiceStatus');
+  const pageContext = new URLSearchParams(location.search);
+  const context = Object.fromEntries(['businessId','reportId','businessName','category','location','website'].map(key => [key,pageContext.get(key) || '']));
   let conversationId = null;
   let sending = false;
   let activeController = null;
@@ -107,9 +109,24 @@
       const { investigation } = await api(`/investigations/${encodeURIComponent(id)}`);
       conversationId = investigation.id;
       renderMessages(investigation.messages || [], investigation.communityMatches || []);
+      renderInvestigationContext(investigation);
       input.focus();
       await loadHistory();
     } catch (error) { toast(error.message, 'error'); }
+  }
+
+  function renderInvestigationContext(investigation) {
+    messagesEl.querySelector('.investigation-record-context')?.remove();
+    const panel = document.createElement('section'); panel.className = 'investigation-record-context';
+    const title = document.createElement('strong'); title.textContent = `Investigation ${investigation.id || investigation._id}`; panel.append(title);
+    const status = document.createElement('span'); status.textContent = investigation.status || 'Status not recorded'; panel.append(status);
+    if (investigation.businessId) { const link = document.createElement('a'); link.href = `business-details.html?id=${encodeURIComponent(investigation.businessId)}`; link.textContent = `Business: ${investigation.businessName}`; panel.append(link); }
+    if (investigation.reportId) { const link = document.createElement('a'); link.href = `report-details.html?id=${encodeURIComponent(investigation.reportId)}`; link.textContent = `Related report: ${investigation.reportId}`; panel.append(link); }
+    if (investigation.assignedModerator) { const moderator = document.createElement('span'); moderator.textContent = `Assigned moderator ID: ${investigation.assignedModerator}`; panel.append(moderator); }
+    if (investigation.moderatorNotes) { const notes = document.createElement('p'); notes.textContent = investigation.moderatorNotes; panel.append(notes); }
+    if (investigation.outcome) { const outcome = document.createElement('p'); outcome.textContent = `Outcome: ${investigation.outcome}`; panel.append(outcome); }
+    for (const event of investigation.timeline || []) { const item = document.createElement('small'); item.textContent = `${event.action} · ${event.at ? formatDate(event.at) : 'Date not recorded'}${event.note ? ` · ${event.note}` : ''}`; panel.append(item); }
+    messagesEl.prepend(panel);
   }
 
   function appendUserMessage(text) {
@@ -157,7 +174,7 @@
 
   async function requestChat({ text = '', regenerate = false } = {}) {
     if (sending) return;
-    if (!localStorage.getItem('ss_token')) { location.href = 'login.html?next=investigate.html'; return; }
+    if (!localStorage.getItem('ss_token') && !localStorage.getItem('ss_admin_token')) { location.href = 'login.html?next=investigate.html'; return; }
     if (!regenerate && text.trim().length < 2) return;
     sending = true; activeController = new AbortController();
     input.disabled = true; sendButton.hidden = true; stopButton.hidden = false; stopButton.disabled = false;
@@ -169,10 +186,11 @@
     }
     beginAssistantBubble();
     try {
-      const headers = { 'Content-Type':'application/json', Authorization:`Bearer ${localStorage.getItem('ss_token')}` };
+      const sessionToken = localStorage.getItem('ss_admin_token') || localStorage.getItem('ss_token');
+      const headers = { 'Content-Type':'application/json', Authorization:`Bearer ${sessionToken}` };
       const response = await fetch('/api/investigations/chat', {
         method:'POST', headers, signal:activeController.signal,
-        body:JSON.stringify({ conversationId, message:text.trim(), regenerate }),
+        body:JSON.stringify({ conversationId, message:text.trim(), regenerate, ...(conversationId ? {} : context) }),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -186,7 +204,7 @@
       const handlers = {
         start: data => { conversationId = data.conversationId; loadHistory(); },
         delta: data => { activeText += data.text || ''; const body = activeBubble?.querySelector('.investigation-message-body'); if (body) body.textContent = activeText; scrollToLatest(); },
-        done: data => { conversationId = data.conversationId; finishAssistantBubble(data.sources || []); if (data.communityMatches) messagesEl.insertAdjacentHTML('beforeend', communityMatchesMarkup(data.communityMatches)); loadHistory(); },
+        done: data => { conversationId = data.conversationId; finishAssistantBubble(data.sources || []); if (data.communityMatches) messagesEl.insertAdjacentHTML('beforeend', communityMatchesMarkup(data.communityMatches)); api(`/investigations/${encodeURIComponent(conversationId)}`).then(result => renderInvestigationContext(result.investigation)).catch(() => {}); loadHistory(); },
         error: data => { throw new Error(data.message || 'The AI could not complete the response.'); },
       };
       while (true) {
@@ -266,5 +284,8 @@
         : 'AI service is not configured yet. Add GEMINI_API_KEY to the project .env file and restart the backend.';
     statusEl.classList.toggle('is-unconfigured', !endpointReady || !data.configured);
   }).catch(() => { statusEl.textContent = 'AI service status is unavailable. Check the server connection.'; statusEl.classList.add('is-unconfigured'); });
+  if (context.businessId && context.businessName) input.value = `Investigate this business: ${context.businessName}`;
+  const requestedConversation = pageContext.get('conversationId');
+  if (requestedConversation) openConversation(requestedConversation);
   loadHistory();
 })();
