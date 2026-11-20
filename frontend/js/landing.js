@@ -1,5 +1,21 @@
 (() => {
   document.documentElement.classList.add('landing-motion-ready');
+  const menu = document.querySelector('.landing-menu-toggle');
+  const backdrop = document.querySelector('.landing-page .sidebar-backdrop');
+  const closeMenu = () => {
+    document.body.classList.remove('mobile-sidebar-open');
+    menu?.setAttribute('aria-expanded', 'false');
+    menu?.setAttribute('aria-label', 'Open navigation');
+  };
+  menu?.addEventListener('click', () => {
+    const open = document.body.classList.toggle('mobile-sidebar-open');
+    menu.setAttribute('aria-expanded', String(open));
+    menu.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+  });
+  backdrop?.addEventListener('click', closeMenu);
+  document.querySelectorAll('.landing-links a').forEach(link => link.addEventListener('click', closeMenu));
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeMenu(); });
+  window.addEventListener('resize', () => { if (window.innerWidth > 1023) closeMenu(); });
   document.querySelectorAll('.service-card[href]').forEach(card => card.addEventListener('click', event => {
     if (localStorage.getItem('ss_token')) return;
     event.preventDefault();
